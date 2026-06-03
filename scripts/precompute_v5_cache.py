@@ -95,19 +95,22 @@ def _process_one(task: tuple[str, str, str]) -> tuple[str, str, float]:
     if img_bgr is None:
         return (name, "ERROR_READ", 0.0)
 
-    flat_rgb, fov_mask, confident, rotation_sigma_deg = (
-        _PIPELINE.precompute_deterministic(img_bgr, eye_side)
-    )
+    try:
+        flat_rgb, fov_mask, confident, rotation_sigma_deg = (
+            _PIPELINE.precompute_deterministic(img_bgr, eye_side)
+        )
 
-    # 4-channel PNG: BGR (for cv2 round-trip) + binary mask as alpha (0/255).
-    bgr = cv2.cvtColor(flat_rgb, cv2.COLOR_RGB2BGR)
-    alpha = (fov_mask > 0.5).astype(np.uint8) * 255
-    bgra = np.dstack([bgr, alpha])
+        # 4-channel PNG: BGR (for cv2 round-trip) + binary mask as alpha (0/255).
+        bgr = cv2.cvtColor(flat_rgb, cv2.COLOR_RGB2BGR)
+        alpha = (fov_mask > 0.5).astype(np.uint8) * 255
+        bgra = np.dstack([bgr, alpha])
 
-    out_png = _OUT_DIR / f"{name}.png"
-    ok = cv2.imwrite(str(out_png), bgra, [cv2.IMWRITE_PNG_COMPRESSION, _PNG_COMPRESSION])
-    if not ok:
-        return (name, "ERROR_WRITE", 0.0)
+        out_png = _OUT_DIR / f"{name}.png"
+        ok = cv2.imwrite(str(out_png), bgra, [cv2.IMWRITE_PNG_COMPRESSION, _PNG_COMPRESSION])
+        if not ok:
+            return (name, "ERROR_WRITE", 0.0)
+    except Exception as exc:  # one bad image must not abort the whole multiprocess build
+        return (name, f"ERROR_PROC:{type(exc).__name__}", 0.0)
 
     return (name, f"ok:{bool(confident)}", float(rotation_sigma_deg))
 

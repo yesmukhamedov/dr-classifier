@@ -159,7 +159,14 @@ def compute_stats(
             n_failed += 1
             continue
 
-        image_rgb, fov_mask = _preprocess_stages_0_to_4(img_bgr, eye_side, config)
+        try:
+            image_rgb, fov_mask = _preprocess_stages_0_to_4(img_bgr, eye_side, config)
+        except Exception as exc:  # one bad image must not abort the whole pass
+            n_failed += 1
+            if n_failed <= 5:
+                print(f"  [warn] Stage 0-4 failed on {path.name}: "
+                      f"{type(exc).__name__}: {exc}", flush=True)
+            continue
 
         sel = fov_mask > 0.5  # (S, S) boolean — real FOV pixels only
         pixels = image_rgb[sel].astype(np.float64) / 255.0  # (P, 3) in [0, 1]
@@ -176,7 +183,10 @@ def compute_stats(
                   f"({n_failed} failed)…", flush=True)
 
     if n_pixels == 0:
-        raise RuntimeError("No FOV pixels collected — check --images-root/--labels-csv.")
+        raise RuntimeError(
+            f"No FOV pixels collected from {len(samples)} sample(s) "
+            f"({n_failed} failed to load/preprocess) — check --images-root / "
+            f"--labels-csv and the [warn] lines above.")
 
     mean = ch_sum / n_pixels
     var = ch_sumsq / n_pixels - mean ** 2
