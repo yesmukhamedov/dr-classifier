@@ -13,7 +13,7 @@ Protocol:
 Output: <output_dir>/exp4/iou_results.json
         <output_dir>/exp4/gradcam/  (PNG per IDRiD image)
 
-NC-14 (INVARIANTS v2.2): Grad-CAM activation does NOT constitute clinical
+NC-14 (INVARIANTS): Grad-CAM activation does NOT constitute clinical
 localization of pathology — it is an interpretability tool only.
 """
 
@@ -40,7 +40,8 @@ from src.explainability.iou import (
 )
 from src.explainability.visualization import create_comparison_figure
 from src.models.efficientnet import create_efficientnet, get_gradcam_target_layer
-from src.preprocessing.pipeline import PreprocessingPipeline
+from src.preprocessing.pipeline_v5 import PreprocessingPipelineV5
+from src.preprocessing.config import PreprocessingV5Config
 from src.training.checkpoint import CheckpointManager
 from src.training.trainer import Trainer
 from src.utils.seed import set_seed
@@ -73,23 +74,21 @@ def _load_eyepacs_index(
     return paths, labels, pids
 
 
-def _build_pipeline(preproc_cfg: dict, full: bool) -> PreprocessingPipeline:
-    """Build baseline (resize-only) or full (all-5) preprocessing pipeline."""
-    kwargs = {
-        "target_size":      preproc_cfg.get("target_size", 512),
-        "clahe_clip_limit": preproc_cfg.get("clahe", {}).get("clip_limit", 2.0),
-        "clahe_grid_size":  preproc_cfg.get("clahe", {}).get("tile_grid_size", [8, 8]),
-        "saturation_scale": preproc_cfg.get("hsv", {}).get("saturation_scale", 1.2),
-        "value_scale":      preproc_cfg.get("hsv", {}).get("value_scale", 1.1),
-    }
+def _build_pipeline(config: dict, full: bool, is_training: bool = False) -> PreprocessingPipelineV5:
+    """Build baseline (resize-only) or full V5 preprocessing pipeline."""
     if full:
-        return PreprocessingPipeline.create_full(kwargs)
-    return PreprocessingPipeline.create_baseline(target_size=kwargs["target_size"])
+        v5_cfg = config.get("preprocessing_v5", {})
+        pp_config = PreprocessingV5Config.from_dict(v5_cfg)
+        return PreprocessingPipelineV5(pp_config, is_training=is_training)
+    target_size = config.get("preprocessing_v5", {}).get("target_size", 512)
+    return PreprocessingPipelineV5.create_baseline_v5(
+        target_size=target_size, is_training=is_training,
+    )
 
 
 def _train_model(
     config: dict,
-    pipeline: PreprocessingPipeline,
+    pipeline: PreprocessingPipelineV5,
     all_paths: list[str],
     all_labels: list[int],
     all_pids: list[str],
@@ -251,7 +250,7 @@ def run(
     gradcam_dir.mkdir(exist_ok=True)
 
     cv_cfg      = config["cross_validation"]
-    preproc_cfg = config["preprocessing"]
+    # V5 pipeline config
     n_folds     = cv_cfg["n_folds"]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -276,8 +275,8 @@ def run(
         raise RuntimeError("Patient leakage in CV splits — aborting.")
 
     # ── Build preprocessing pipelines ────────────────────────────────────────
-    pipeline_baseline = _build_pipeline(preproc_cfg, full=False)
-    pipeline_full     = _build_pipeline(preproc_cfg, full=True)
+    pipeline_baseline = _build_pipeline(config, full=False, is_training=False)
+    pipeline_full     = _build_pipeline(config, full=True, is_training=False)
 
     # ── Train or load both models ─────────────────────────────────────────────
     print(f"\n{'='*65}")
@@ -413,7 +412,7 @@ def run(
     ]
     h5_supported = len(improved_lesion_types) >= 3
 
-    # ALO H-5 direction (primary metric per INVARIANTS v2.2)
+    # ALO H-5 direction (primary metric per INVARIANTS)
     improved_alo_types = [
         lt for lt in _LESION_TYPES
         if (not np.isnan(mean_alo_full.get(lt, float("nan")))

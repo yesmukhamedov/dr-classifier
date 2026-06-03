@@ -6,7 +6,7 @@ applies a single unified affine transform (rotation + zoom + stretch + shear),
 stochastic interpolation, PCA colour jitter, and brightness/contrast scaling.
 
 Applied to **RGB uint8** images *before* ImageNet normalisation (Stage 4).
-All sub-transforms are individually toggleable via :class:`PreprocessingV4Config`.
+All sub-transforms are individually toggleable via :class:`PreprocessingV5Config`.
 
 References
 ----------
@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 import cv2
 import numpy as np
 
-from src.preprocessing.config import PreprocessingV4Config
+from src.preprocessing.config import PreprocessingV5Config
 
 
 class FundusAugmentationV4:
@@ -35,7 +35,7 @@ class FundusAugmentationV4:
     sub-transforms are controlled by the boolean toggles in *config*.
 
     Args:
-        config: :class:`PreprocessingV4Config` controlling all augmentation
+        config: :class:`PreprocessingV5Config` controlling all augmentation
             parameters and toggle flags.
         pca_eigvecs: PCA eigenvectors of shape ``(3, 3)`` computed offline
             from the training set.  ``None`` disables PCA colour jitter
@@ -46,7 +46,7 @@ class FundusAugmentationV4:
 
     def __init__(
         self,
-        config: PreprocessingV4Config,
+        config: PreprocessingV5Config,
         pca_eigvecs: np.ndarray | None = None,
         pca_eigvals: np.ndarray | None = None,
     ) -> None:

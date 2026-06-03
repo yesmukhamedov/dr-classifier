@@ -22,7 +22,7 @@ METRICS_CSV_HEADER = [
     "weighted_f1", "roc_auc", "kappa", "accuracy",
 ]
 
-VALID_EXPERIMENTS = ["exp1", "exp2", "exp3", "exp4", "exp5", "exp6"]
+VALID_EXPERIMENTS = ["exp1", "exp2", "exp3", "exp4", "exp5", "exp6", "exp7"]
 
 
 def _create_output_dirs(output_root: Path, exp_name: str, n_folds: int) -> None:
@@ -48,10 +48,11 @@ def _create_output_dirs(output_root: Path, exp_name: str, n_folds: int) -> None:
 _EXP_MODULES: dict[str, str] = {
     "exp1": "src.experiments.exp1_factorial",
     "exp2": "src.experiments.exp2_ablation",
-    "exp3": "src.experiments.exp3_robustness",
+    "exp3": "src.experiments.exp3_transferability",
     "exp4": "src.experiments.exp4_explainability",
-    "exp5": "src.experiments.exp5_generalization",
+    "exp5": "src.experiments.exp5_clinical_degradation",
     "exp6": "src.experiments.exp6_device_shift",
+    "exp7": "src.experiments.exp7_clinical",
 }
 
 
@@ -85,7 +86,7 @@ def main() -> None:
     parser.add_argument(
         "experiment",
         choices=VALID_EXPERIMENTS,
-        help="Experiment to run (exp1–exp6)",
+        help="Experiment to run (exp1–exp7)",
     )
     parser.add_argument(
         "--config",

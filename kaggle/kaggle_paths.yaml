@@ -1,0 +1,22 @@
+# Kaggle environment overrides for configs/default.yaml.
+#
+# This file is NOT passed to run_experiment.py directly (the CLI accepts a
+# single --config). Instead, kaggle/merge_config.py deep-merges
+# default.yaml <- kaggle_paths.yaml (+ optional CLI dotted overrides) and
+# writes configs/kaggle_merged.yaml, which every command then consumes.
+#
+# Only keys that differ from default.yaml live here; everything else is
+# inherited by deep merge.
+
+paths:
+  # EyePACS competition mounts read-only at this path. If the notebook's
+  # adapter has to extract/restructure the data, it overrides paths.eyepacs
+  # at merge time via:  paths.eyepacs=<resolved_dir>
+  eyepacs:    "/kaggle/input/diabetic-retinopathy-detection"
+  # /kaggle/working persists across "Save Version", so outputs survive.
+  output_dir: "/kaggle/working/outputs"
+
+training:
+  num_workers: 2     # Kaggle CPU is weaker than the local box; 2 is safer.
+  batch_size:  16    # T4 has 16 GB. EfficientNet runs fp32 (mixed precision
+                     # disabled), so if you hit CUDA OOM at 512px, drop to 8.

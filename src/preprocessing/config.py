@@ -1,9 +1,9 @@
 """
-V4 preprocessing configuration dataclass and pipeline presets.
+V5 preprocessing configuration dataclass and pipeline presets.
 
-All V4 pipeline stages are parameterised through :class:`PreprocessingV4Config`.
-Use :meth:`PreprocessingV4Config.from_dict` to load from a YAML-parsed dict and
-:meth:`PreprocessingV4Config.from_preset` to start from a named model preset.
+All V5 pipeline stages are parameterised through :class:`PreprocessingV5Config`.
+Use :meth:`PreprocessingV5Config.from_dict` to load from a YAML-parsed dict and
+:meth:`PreprocessingV5Config.from_preset` to start from a named model preset.
 """
 
 from __future__ import annotations
@@ -20,23 +20,29 @@ import cv2
 # ---------------------------------------------------------------------------
 
 @dataclass
-class PreprocessingV4Config:
+class PreprocessingV5Config:
     """
-    Unified configuration for the V4 preprocessing + augmentation pipeline.
+    Unified configuration for the V5 preprocessing + augmentation pipeline.
 
     Fields are grouped by pipeline stage.  Boolean toggles allow individual
     stages/sub-stages to be disabled (e.g. for ablation experiments).
 
     Args:
+        mode: Pipeline mode. ``"full"`` runs all V5 stages. ``"baseline"``
+            does simple stretch-resize + ImageNet normalize (3 channels, no mask).
         use_canonical_flip: Enable Stage 0 horizontal flip for left-eye images.
-        use_flat_field: Enable Stage 2 Gaussian flat-field correction.
-        use_clahe: Enable Stage 3 upgraded CLAHE L-channel enhancement.
-        use_pca_color: Enable Stage 5 PCA colour jitter augmentation.
-        use_brightness_contrast: Enable Stage 5 brightness/contrast augmentation.
-        use_shear: Enable Stage 5 shear component of the affine transform.
-        use_stretch: Enable Stage 5 anisotropic stretch component.
+        use_od_fovea_rotation: Enable Stage 1 OD–fovea axis rotation normalization.
+        use_flat_field: Enable Stage 4 Gaussian flat-field correction.
+        use_clahe: Enable Stage 5 upgraded CLAHE L-channel enhancement.
+        use_pca_color: Enable Stage 6 PCA colour jitter augmentation.
+        use_brightness_contrast: Enable Stage 6 brightness/contrast augmentation.
+        use_shear: Enable Stage 6 shear component of the affine transform.
+        use_stretch: Enable Stage 6 anisotropic stretch component.
         target_size: Output spatial resolution in pixels (square).
-        flat_field_sigma: Gaussian σ for flat-field blur subtraction.
+        flat_field_mode: ``"adaptive"`` (σ=factor·D) or ``"fixed"`` (σ=flat_field_sigma).
+        flat_field_sigma_factor: σ = factor × FOV diameter D (used when mode=adaptive).
+        flat_field_sigma: Gaussian σ for flat-field blur subtraction (fixed mode or fallback).
+        flat_field_mask_only: Apply correction only inside FOV mask when ``True``.
         clahe_tile_grid_size: CLAHE tile grid as (rows, cols).
         clahe_clip_factor: Clip-limit scale factor (× tile_area / 256).
         clahe_global_threshold: Additional global clip limit (× tile_area).
@@ -54,9 +60,13 @@ class PreprocessingV4Config:
         brightness_alpha_range: Contrast multiplier range [min, max].
         brightness_beta_range: Brightness additive range [min, max] (uint8 scale).
         bc_prob: Probability of applying brightness/contrast augmentation.
-        normalize_mean: Per-channel mean for ImageNet normalisation.
-        normalize_std: Per-channel std for ImageNet normalisation.
-        use_od_fovea_rotation: Enable Stage 0b OD–fovea axis rotation normalization.
+        normalize_mode: ``"dataset_specific"`` or ``"imagenet"``.
+        dataset_mean: Per-channel mean from EyePACS training set (mask=1.0 only).
+            ``None`` falls back to ImageNet mean.
+        dataset_std: Per-channel std from EyePACS training set (mask=1.0 only).
+            ``None`` falls back to ImageNet std.
+        normalize_mean: ImageNet per-channel mean (fallback for baseline/imagenet mode).
+        normalize_std: ImageNet per-channel std (fallback for baseline/imagenet mode).
         od_blur_sigma: Gaussian σ for OD detection blur.
         od_percentile: Intensity percentile for OD mask threshold.
         fovea_blur_sigma: Gaussian σ for fovea detection blur.
@@ -68,9 +78,12 @@ class PreprocessingV4Config:
             or adaptive_rotation_sigma is False.
     """
 
+    # --- Mode ---
+    mode: str = "full"                      # "full" or "baseline"
+
     # --- Toggles ---
     use_canonical_flip: bool = True
-    use_od_fovea_rotation: bool = True      # NEW: Stage 0b rotation normalization
+    use_od_fovea_rotation: bool = True
     use_flat_field: bool = True
     use_clahe: bool = True
     use_pca_color: bool = True
@@ -78,19 +91,22 @@ class PreprocessingV4Config:
     use_shear: bool = True
     use_stretch: bool = True
 
-    # --- Stage 1: Crop + Resize ---
+    # --- Stage 2: Crop + Resize ---
     target_size: int = 512
 
-    # --- Stage 2: Flat-Field Correction ---
+    # --- Stage 4: Flat-Field Correction ---
+    flat_field_mode: str = "adaptive"       # "adaptive" or "fixed"
+    flat_field_sigma_factor: float = 0.07   # σ = factor × FOV diameter
     flat_field_sigma: float = 45.0
+    flat_field_mask_only: bool = True       # apply only inside FOV mask
 
-    # --- Stage 3: Upgraded CLAHE ---
+    # --- Stage 5: Upgraded CLAHE ---
     clahe_tile_grid_size: tuple[int, int] = (8, 8)
     clahe_clip_factor: float = 2.0
     clahe_global_threshold: float = 0.01
     clahe_train_prob: float = 0.8
 
-    # --- Stage 5: Augmentation ---
+    # --- Stage 6: Augmentation ---
     rotation_sigma: float = 13.0
     rotation_clip: float = 40.0
     zoom_range: tuple[float, float] = (0.9, 1.1)
@@ -105,11 +121,14 @@ class PreprocessingV4Config:
     brightness_beta_range: tuple[float, float] = (-10.0, 10.0)
     bc_prob: float = 0.5
 
-    # --- Stage 4: Normalise ---
+    # --- Stage 7: Normalise ---
+    normalize_mode: str = "dataset_specific"  # "dataset_specific" or "imagenet"
+    dataset_mean: tuple[float, float, float] | None = None
+    dataset_std: tuple[float, float, float] | None = None
     normalize_mean: tuple[float, float, float] = (0.485, 0.456, 0.406)
     normalize_std: tuple[float, float, float] = (0.229, 0.224, 0.225)
 
-    # --- Stage 0b: OD-Fovea Rotation Detection ---
+    # --- Stage 1: OD-Fovea Rotation Detection ---
     od_blur_sigma: float = 15.0
     od_percentile: float = 97.0
     fovea_blur_sigma: float = 25.0
@@ -123,20 +142,20 @@ class PreprocessingV4Config:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "PreprocessingV4Config":
+    def from_dict(cls, d: dict[str, Any]) -> "PreprocessingV5Config":
         """
-        Build a :class:`PreprocessingV4Config` from a plain dict.
+        Build a :class:`PreprocessingV5Config` from a plain dict.
 
         Keys absent from *d* retain their dataclass defaults.  List values
         are coerced to tuples for tuple-annotated fields (e.g. when loading
         from a YAML file where sequences are represented as lists).
 
         Args:
-            d: Dict of field overrides, typically from a YAML ``preprocessing_v4``
+            d: Dict of field overrides, typically from a YAML ``preprocessing_v5``
                section.
 
         Returns:
-            PreprocessingV4Config instance.
+            PreprocessingV5Config instance.
         """
         kwargs: dict[str, Any] = {}
         for f in dataclasses.fields(cls):
@@ -156,9 +175,9 @@ class PreprocessingV4Config:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_preset(cls, preset_name: str) -> "PreprocessingV4Config":
+    def from_preset(cls, preset_name: str) -> "PreprocessingV5Config":
         """
-        Build a :class:`PreprocessingV4Config` from a named preset.
+        Build a :class:`PreprocessingV5Config` from a named preset.
 
         The preset supplies a partial dict of overrides applied on top of
         dataclass defaults; unspecified fields keep their default values.
@@ -168,7 +187,7 @@ class PreprocessingV4Config:
                 (currently ``"resnet"`` or ``"efficientnet"``).
 
         Returns:
-            PreprocessingV4Config instance.
+            PreprocessingV5Config instance.
 
         Raises:
             ValueError: If *preset_name* is not found in :data:`PIPELINE_PRESETS`.
@@ -213,3 +232,5 @@ PIPELINE_PRESETS: dict[str, dict[str, Any]] = {
         "adaptive_rotation_sigma": True,
     },
 }
+
+

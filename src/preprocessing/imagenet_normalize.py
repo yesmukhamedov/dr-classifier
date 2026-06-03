@@ -1,11 +1,8 @@
 """
-Stage 4 (V4): ImageNet Normalisation.
+Stage 7 (V5): Normalisation.
 
-Replaces simple ÷255 normalisation (V3 ``normalization.py``) with the
-ImageNet-standard pipeline:
-
-    1. ``ToTensor``  — HWC uint8 → CHW float32 in [0, 1]
-    2. ``Normalize`` — channel-wise (x − mean) / std
+Supports both ImageNet statistics (for baseline configs) and dataset-specific
+statistics computed from the EyePACS training set (for full V5 pipeline).
 
 Output is a ``torch.Tensor`` of shape ``(3, H, W)``, ready for CNN input.
 
@@ -28,7 +25,31 @@ def imagenet_normalize(
     Convert an RGB uint8 image to a normalised float32 CHW tensor.
 
     Applies ``ToTensor`` (HWC uint8 → CHW float32 in [0, 1]) followed by
-    channel-wise normalisation with ImageNet mean and std.
+    channel-wise normalisation with the provided mean and std.
+
+    Args:
+        image: RGB uint8 NumPy array of shape ``(H, W, 3)``.
+        mean: Per-channel mean for normalisation.
+        std: Per-channel standard deviation for normalisation.
+
+    Returns:
+        Float32 tensor of shape ``(3, H, W)``.
+    """
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(mean=list(mean), std=list(std)),
+    ])
+    return transform(image)
+
+
+def normalize_to_tensor(
+    image: np.ndarray,
+    mean: tuple[float, float, float],
+    std: tuple[float, float, float],
+) -> torch.Tensor:
+    """Convert RGB uint8 image to normalized CHW float32 tensor.
+
+    Supports both ImageNet and dataset-specific stats.
 
     Args:
         image: RGB uint8 NumPy array of shape ``(H, W, 3)``.

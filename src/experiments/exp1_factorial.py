@@ -1,18 +1,14 @@
-"""Experiment 1: 2×2 Factorial Ablation — Preprocessing × Architecture (H-1).
+"""Experiment 1: 2×2 Factorial — Preprocessing Dominance (H-1).
 
-Tests whether the V4 preprocessing pipeline produces statistically dominant
+Tests whether the V5 preprocessing pipeline produces statistically dominant
 improvement over resize-only baseline, independently for ResNet-50 and
-EfficientNet-B3 (EH-3 criteria, EH-4 replication requirement).
+EfficientNet-B3 (dominance criteria: ΔF1≥5pp, ΔAUC≥0.02, no κ degradation).
 
 Configurations:
-  A — baseline (resize+normalize) + ResNet-50
-  B — full V4 pipeline           + ResNet-50
-  C — baseline (resize+normalize) + EfficientNet-B3
-  D — full V4 pipeline           + EfficientNet-B3
-  E — full V4 pipeline           + ResNet-50       + per-patient blending
-  F — full V4 pipeline           + EfficientNet-B3 + per-patient blending
-
-E and F run only when explicitly requested (--configs E,F).
+  A — baseline (stretch-resize+ImageNet norm, 3ch) + ResNet-50
+  B — full V5 pipeline (4ch)                       + ResNet-50
+  C — baseline (stretch-resize+ImageNet norm, 3ch) + EfficientNet-B3
+  D — full V5 pipeline (4ch)                       + EfficientNet-B3
 """
 
 from __future__ import annotations
@@ -26,12 +22,18 @@ import pandas as pd
 import torch
 from torch.utils.data import DataLoader
 
-from src.data.datasets import EyePACSDataset, EyePACSPatientPairDataset, patient_pair_collate
+from src.data.datasets import (
+    CachedEyePACSDataset,
+    EyePACSDataset,
+    EyePACSPatientPairDataset,
+    load_cache_meta,
+    patient_pair_collate,
+)
 from src.data.splits import PatientLevelKFold
 from src.evaluation.metrics import check_dominance
 from src.models.factory import create_model, create_patient_model
-from src.preprocessing.config import PreprocessingV4Config
-from src.preprocessing.pipeline_v4 import PreprocessingPipelineV4
+from src.preprocessing.config import PreprocessingV5Config
+from src.preprocessing.pipeline_v5 import PreprocessingPipelineV5
 from src.training.checkpoint import CheckpointManager
 from src.training.patient_trainer import PatientTrainer
 from src.training.trainer import Trainer
@@ -40,17 +42,14 @@ from src.utils.seed import set_seed
 
 # ── Factorial design ──────────────────────────────────────────────────────────
 _CONFIGS: dict[str, dict[str, Any]] = {
-    "A": {"preprocessing": "baseline", "model": "resnet50"},
-    "B": {"preprocessing": "full",     "model": "resnet50"},
-    "C": {"preprocessing": "baseline", "model": "efficientnet_b3"},
-    "D": {"preprocessing": "full",     "model": "efficientnet_b3"},
-    # Per-patient blending (optional — run with --configs E or --configs F)
-    "E": {"preprocessing": "full", "model": "resnet50",        "blending": True},
-    "F": {"preprocessing": "full", "model": "efficientnet_b3", "blending": True},
+    "A": {"preprocessing": "baseline", "model": "resnet50",        "in_channels": 3},
+    "B": {"preprocessing": "full",     "model": "resnet50",        "in_channels": 4},
+    "C": {"preprocessing": "baseline", "model": "efficientnet_b3", "in_channels": 3},
+    "D": {"preprocessing": "full",     "model": "efficientnet_b3", "in_channels": 4},
 }
 
 
-# ── V4 preprocessing factory ──────────────────────────────────────────────────
+# ── V5 preprocessing factory ──────────────────────────────────────────────────
 
 def _make_preprocessing(
     kind: str,
@@ -58,37 +57,50 @@ def _make_preprocessing(
     is_training: bool,
     pca_eigvecs: np.ndarray | None = None,
     pca_eigvals: np.ndarray | None = None,
-) -> PreprocessingPipelineV4:
-    """Build a V4 preprocessing pipeline.
+    dataset_mean: tuple[float, float, float] | None = None,
+    dataset_std: tuple[float, float, float] | None = None,
+) -> PreprocessingPipelineV5:
+    """Build a V5 preprocessing pipeline.
 
     Args:
-        kind: ``"baseline"`` (crop + resize + normalize only) or ``"full"``
-            (all V4 stages with model-specific preset).
+        kind: ``"baseline"`` (stretch-resize + ImageNet normalize, 3ch) or
+            ``"full"`` (all V5 stages, 4ch, model-specific preset).
         model_name: ``"resnet50"`` or ``"efficientnet_b3"`` — selects the
             augmentation preset for the full pipeline.
         is_training: Enables stochastic CLAHE and augmentation when ``True``.
         pca_eigvecs: PCA eigenvectors for colour augmentation (optional).
         pca_eigvals: PCA eigenvalues for colour augmentation (optional).
+        dataset_mean: EyePACS-computed per-channel mean for Stage 7
+            dataset-specific normalize (full pipeline only). ``None`` falls
+            back to ImageNet stats (and prints a warning).
+        dataset_std: EyePACS-computed per-channel std (see ``dataset_mean``).
 
     Returns:
-        Configured :class:`~src.preprocessing.pipeline_v4.PreprocessingPipelineV4`.
+        Configured :class:`~src.preprocessing.pipeline_v5.PreprocessingPipelineV5`.
     """
     if kind == "baseline":
-        return PreprocessingPipelineV4.create_baseline(
+        return PreprocessingPipelineV5.create_baseline_v5(
             target_size=512,
             is_training=is_training,
         )
 
     preset_name = "efficientnet" if "efficientnet" in model_name else "resnet"
-    config = PreprocessingV4Config.from_preset(preset_name)
+    config = PreprocessingV5Config.from_preset(preset_name)
+
+    # Stage 7: dataset-specific normalize (D-2). The preset leaves these None,
+    # which silently falls back to ImageNet — not the thesis-defended pipeline
+    # for the full configs. Inject EyePACS-computed stats when available.
+    if dataset_mean is not None and dataset_std is not None:
+        config.dataset_mean = tuple(dataset_mean)
+        config.dataset_std = tuple(dataset_std)
 
     if is_training:
-        return PreprocessingPipelineV4.create_for_training(
+        return PreprocessingPipelineV5.create_for_training(
             config,
             pca_eigvecs=pca_eigvecs,
             pca_eigvals=pca_eigvals,
         )
-    return PreprocessingPipelineV4.create_for_inference(config)
+    return PreprocessingPipelineV5.create_for_inference(config)
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -124,6 +136,45 @@ def _load_eyepacs_index(
     for _, row in df.iterrows():
         name = str(row["image"])
         p = root_path / f"{name}.jpeg"
+        if not p.exists():
+            continue
+        paths.append(str(p))
+        labels.append(int(row["level"]))
+        pids.append(name.split("_")[0])
+        eye_sides.append("left" if "_left" in name else "right")
+
+    return paths, labels, pids, eye_sides
+
+
+def _load_cache_index(
+    cache_dir: str,
+    subset_size: int | None = None,
+) -> tuple[list[str], list[int], list[str], list[str]]:
+    """Read the V5 cache index (drop-in for :func:`_load_eyepacs_index`).
+
+    Uses the cache's self-contained ``trainLabels.csv``; "paths" are the cached
+    ``<name>.png`` files, filtered to those present on disk.
+
+    Args:
+        cache_dir: Directory written by ``scripts/precompute_v5_cache.py``.
+        subset_size: If set, use only the first N CSV rows (smoke tests).
+
+    Returns:
+        Tuple ``(cache_png_paths, labels, patient_ids, eye_sides)``.
+    """
+    cache_path = Path(cache_dir)
+    df = pd.read_csv(cache_path / "trainLabels.csv")
+    if subset_size is not None:
+        df = df.iloc[:subset_size].reset_index(drop=True)
+
+    paths: list[str] = []
+    labels: list[int] = []
+    pids: list[str] = []
+    eye_sides: list[str] = []
+
+    for _, row in df.iterrows():
+        name = str(row["image"])
+        p = cache_path / f"{name}.png"
         if not p.exists():
             continue
         paths.append(str(p))
@@ -217,6 +268,9 @@ def run(
     eyepacs_root = config["paths"]["eyepacs"]
     labels_csv   = str(Path(eyepacs_root) / "trainLabels.csv")
     images_root  = str(Path(eyepacs_root) / "train")
+    # Optional V5 Stage 0–4 cache (throughput fix, TASK §2). When set, the full
+    # configs (B/D) read cached PNGs and run only Stages 5–7 per epoch.
+    v5_cache_dir = config.get("paths", {}).get("v5_cache_dir")
     output_dir   = Path(config["paths"]["output_dir"]) / "exp1"
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "logs").mkdir(exist_ok=True)
@@ -241,12 +295,41 @@ def run(
     else:
         print("  PCA eigenvectors not found — colour augmentation disabled.")
 
+    # ── Dataset-specific normalize stats (Stage 7, D-2) ───────────────────────
+    # Computed by scripts/compute_dataset_stats.py (Stages 0–4, mask=1.0 only).
+    # Consumed by the full configs (B/D). Absent → ImageNet fallback (warned).
+    dataset_mean: tuple[float, float, float] | None = None
+    dataset_std: tuple[float, float, float] | None = None
+    stats_path = pca_dir / "eyepacs_norm_stats.json"
+    if stats_path.exists():
+        with open(stats_path) as f:
+            _stats = json.load(f)
+        dataset_mean = tuple(_stats["mean"])
+        dataset_std = tuple(_stats["std"])
+        print(f"  Dataset normalize stats loaded from {stats_path}")
+        print(f"    mean={[round(x, 4) for x in dataset_mean]} "
+              f"std={[round(x, 4) for x in dataset_std]}")
+    else:
+        print("  Dataset normalize stats not found — full configs (B/D) will "
+              "fall back to ImageNet (NOT thesis-faithful). Run "
+              "scripts/compute_dataset_stats.py to fix.")
+
     # ── Load index once ───────────────────────────────────────────────────────
-    print(f"Loading EyePACS index from {labels_csv} …")
-    all_paths, all_labels, all_pids, all_eye_sides = _load_eyepacs_index(
-        images_root, labels_csv, subset_size=_subset_size
-    )
-    print(f"  Found {len(all_paths)} images | {len(set(all_pids))} patients")
+    cache_meta: dict[str, tuple[bool, float]] | None = None
+    if v5_cache_dir:
+        print(f"Loading V5 cache index from {v5_cache_dir} …")
+        all_paths, all_labels, all_pids, all_eye_sides = _load_cache_index(
+            v5_cache_dir, subset_size=_subset_size
+        )
+        cache_meta = load_cache_meta(v5_cache_dir)
+        print(f"  Found {len(all_paths)} cached images | {len(set(all_pids))} patients "
+              f"| {len(cache_meta)} meta rows")
+    else:
+        print(f"Loading EyePACS index from {labels_csv} …")
+        all_paths, all_labels, all_pids, all_eye_sides = _load_eyepacs_index(
+            images_root, labels_csv, subset_size=_subset_size
+        )
+        print(f"  Found {len(all_paths)} images | {len(set(all_pids))} patients")
 
     # ── Stratified patient-level subset ───────────────────────────────────────
     subset_cfg = config.get("subset", {})
@@ -307,20 +390,16 @@ def run(
         cfg_spec     = _CONFIGS[cfg_key]
         model_name   = cfg_spec["model"]
         preproc_kind = cfg_spec["preprocessing"]
-        is_blending  = bool(cfg_spec.get("blending", False))
-        model_cfg    = config["models"][model_name]
+        in_channels  = cfg_spec.get("in_channels", 4)
+        model_cfg    = {**config["models"][model_name], "in_channels": in_channels}
 
-        # Mixed precision: disable for EfficientNet
-        use_amp = config.get("training", {}).get("mixed_precision", True)
-        if "efficientnet" in model_name:
-            use_amp = False
-            print(f"  [INFO] Mixed precision DISABLED for {model_name}")
+        # Mixed precision: read from per-model config (D-6 design decision)
+        use_amp = config.get("models", {}).get(model_name, {}).get("mixed_precision", True)
         trainer.mixed_precision         = use_amp
         patient_trainer.mixed_precision = use_amp
 
         print(f"\n{'='*65}")
-        blend_tag = " [blending]" if is_blending else ""
-        print(f"  Config {cfg_key} | {preproc_kind} preprocessing | {model_name}{blend_tag}")
+        print(f"  Config {cfg_key} | {preproc_kind} preprocessing | {model_name} | in_channels={in_channels}")
         print(f"{'='*65}")
 
         for fold_idx in fold_range:
@@ -344,22 +423,42 @@ def run(
             train_preproc = _make_preprocessing(
                 preproc_kind, model_name, is_training=True,
                 pca_eigvecs=pca_eigvecs, pca_eigvals=pca_eigvals,
+                dataset_mean=dataset_mean, dataset_std=dataset_std,
             )
             val_preproc = _make_preprocessing(
                 preproc_kind, model_name, is_training=False,
+                dataset_mean=dataset_mean, dataset_std=dataset_std,
             )
 
             ckpt_dir = output_dir / "checkpoints" / f"{cfg_key}_fold{fold_idx}"
             ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-            if not is_blending:
-                # ── Configs A–D: standard single-image training ────────────
+            # ── Configs A–D: standard single-image training ────────────────
+            if v5_cache_dir and preproc_kind == "full":
+                # Throughput fix: read cached Stage 0–4 PNGs, run only 5–7.
+                train_ds = CachedEyePACSDataset(
+                    image_paths=tr_paths, labels=tr_labels, patient_ids=tr_pids,
+                    preprocessing=train_preproc, cache_meta=cache_meta,
+                    eye_sides=tr_sides,
+                )
+                val_ds = CachedEyePACSDataset(
+                    image_paths=va_paths, labels=va_labels, patient_ids=va_pids,
+                    preprocessing=val_preproc, cache_meta=cache_meta,
+                    eye_sides=va_sides,
+                )
+            elif v5_cache_dir and preproc_kind == "baseline":
+                raise ValueError(
+                    f"paths.v5_cache_dir is set but Config {cfg_key} is baseline; "
+                    "the V5 cache only covers full-pipeline configs (B/D). "
+                    "Run baseline configs (A/C) without v5_cache_dir."
+                )
+            else:
                 train_ds = EyePACSDataset(
                     image_paths=tr_paths,
                     labels=tr_labels,
                     patient_ids=tr_pids,
                     preprocessing=train_preproc,
-                    augmentation=None,   # augmentation is inside V4 pipeline
+                    augmentation=None,   # augmentation is inside V5 pipeline
                     eye_sides=tr_sides,
                 )
                 val_ds = EyePACSDataset(
@@ -371,128 +470,39 @@ def run(
                     eye_sides=va_sides,
                 )
 
-                train_loader = DataLoader(
-                    train_ds,
-                    batch_size=trainer.batch_size,
-                    shuffle=True,
-                    num_workers=trainer.num_workers,
-                    pin_memory=(trainer.device.type == "cuda"),
-                    drop_last=True,
-                    persistent_workers=(trainer.num_workers > 0),
-                    prefetch_factor=2 if trainer.num_workers > 0 else None,
-                )
-                val_loader = DataLoader(
-                    val_ds,
-                    batch_size=trainer.batch_size,
-                    shuffle=False,
-                    num_workers=trainer.num_workers,
-                    pin_memory=(trainer.device.type == "cuda"),
-                    persistent_workers=(trainer.num_workers > 0),
-                    prefetch_factor=2 if trainer.num_workers > 0 else None,
-                )
+            train_loader = DataLoader(
+                train_ds,
+                batch_size=trainer.batch_size,
+                shuffle=True,
+                num_workers=trainer.num_workers,
+                pin_memory=(trainer.device.type == "cuda"),
+                drop_last=True,
+                persistent_workers=(trainer.num_workers > 0),
+                prefetch_factor=2 if trainer.num_workers > 0 else None,
+            )
+            val_loader = DataLoader(
+                val_ds,
+                batch_size=trainer.batch_size,
+                shuffle=False,
+                num_workers=trainer.num_workers,
+                pin_memory=(trainer.device.type == "cuda"),
+                persistent_workers=(trainer.num_workers > 0),
+                prefetch_factor=2 if trainer.num_workers > 0 else None,
+            )
 
-                ckpt_mgr = CheckpointManager(ckpt_dir, max_keep=5)
-                model = create_model(model_name, model_cfg)
+            ckpt_mgr = CheckpointManager(ckpt_dir, max_keep=5)
+            model = create_model(model_name, model_cfg)
 
-                best_metrics = trainer.train_fold(
-                    model=model,
-                    train_loader=train_loader,
-                    val_loader=val_loader,
-                    fold=fold_idx,
-                    config_name=cfg_key,
-                    checkpoint_mgr=ckpt_mgr,
-                    metrics_csv_path=metrics_csv,
-                    resume=resume,
-                )
-
-            else:
-                # ── Configs E–F: per-patient blending ─────────────────────
-                # Stage 1 single-image loaders (standard (image, label) tuples)
-                si_train_ds = EyePACSDataset(
-                    image_paths=tr_paths,
-                    labels=tr_labels,
-                    patient_ids=tr_pids,
-                    preprocessing=train_preproc,
-                    augmentation=None,
-                    eye_sides=tr_sides,
-                )
-                si_val_ds = EyePACSDataset(
-                    image_paths=va_paths,
-                    labels=va_labels,
-                    patient_ids=va_pids,
-                    preprocessing=val_preproc,
-                    augmentation=None,
-                    eye_sides=va_sides,
-                )
-
-                si_train_loader = DataLoader(
-                    si_train_ds,
-                    batch_size=patient_trainer.batch_size,
-                    shuffle=True,
-                    num_workers=patient_trainer.num_workers,
-                    pin_memory=(patient_trainer.device.type == "cuda"),
-                    drop_last=True,
-                    persistent_workers=(patient_trainer.num_workers > 0),
-                    prefetch_factor=2 if patient_trainer.num_workers > 0 else None,
-                )
-                si_val_loader = DataLoader(
-                    si_val_ds,
-                    batch_size=patient_trainer.batch_size,
-                    shuffle=False,
-                    num_workers=patient_trainer.num_workers,
-                    pin_memory=(patient_trainer.device.type == "cuda"),
-                    persistent_workers=(patient_trainer.num_workers > 0),
-                    prefetch_factor=2 if patient_trainer.num_workers > 0 else None,
-                )
-
-                # Stage 2 patient-pair loaders
-                tr_patient_data = _build_patient_data(tr_paths, tr_labels, tr_pids, tr_sides)
-                va_patient_data = _build_patient_data(va_paths, va_labels, va_pids, va_sides)
-
-                pt_train_ds = EyePACSPatientPairDataset(
-                    patient_data=tr_patient_data,
-                    preprocessing=train_preproc,
-                )
-                pt_val_ds = EyePACSPatientPairDataset(
-                    patient_data=va_patient_data,
-                    preprocessing=val_preproc,
-                )
-
-                pt_train_loader = DataLoader(
-                    pt_train_ds,
-                    batch_size=patient_trainer.batch_size,
-                    shuffle=True,
-                    num_workers=patient_trainer.num_workers,
-                    pin_memory=(patient_trainer.device.type == "cuda"),
-                    drop_last=True,
-                    collate_fn=patient_pair_collate,
-                    persistent_workers=(patient_trainer.num_workers > 0),
-                    prefetch_factor=2 if patient_trainer.num_workers > 0 else None,
-                )
-                pt_val_loader = DataLoader(
-                    pt_val_ds,
-                    batch_size=patient_trainer.batch_size,
-                    shuffle=False,
-                    num_workers=patient_trainer.num_workers,
-                    pin_memory=(patient_trainer.device.type == "cuda"),
-                    collate_fn=patient_pair_collate,
-                    persistent_workers=(patient_trainer.num_workers > 0),
-                    prefetch_factor=2 if patient_trainer.num_workers > 0 else None,
-                )
-
-                patient_model = create_patient_model(model_name, model_cfg)
-
-                best_metrics = patient_trainer.train_two_stage(
-                    patient_model=patient_model,
-                    single_image_train_loader=si_train_loader,
-                    single_image_val_loader=si_val_loader,
-                    patient_train_loader=pt_train_loader,
-                    patient_val_loader=pt_val_loader,
-                    fold=fold_idx,
-                    config_name=cfg_key,
-                    checkpoint_dir=ckpt_dir,
-                    metrics_csv_path=metrics_csv,
-                )
+            best_metrics = trainer.train_fold(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                fold=fold_idx,
+                config_name=cfg_key,
+                checkpoint_mgr=ckpt_mgr,
+                metrics_csv_path=metrics_csv,
+                resume=resume,
+            )
 
             all_results[cfg_key].append(best_metrics)
 
@@ -544,9 +554,8 @@ def run(
     print(f"{'='*65}")
     for cfg_key, cfg_summary in summary_configs.items():
         spec = _CONFIGS.get(cfg_key, {})
-        blend_tag = " [blending]" if spec.get("blending") else ""
         print(f"  Config {cfg_key} ({spec.get('preprocessing','?')}"
-              f" + {spec.get('model','?')}{blend_tag}):")
+              f" + {spec.get('model','?')} in_channels={spec.get('in_channels','?')}):")
         for k, v in cfg_summary.items():
             print(f"    {k}: {v}")
 

@@ -1,7 +1,7 @@
 """IoU and ALO metrics for comparing Grad-CAM heatmaps with lesion masks.
 
-Two metrics are computed (per INVARIANTS v2.2 EH-2 / H-5):
-  ALO  — Attention-Lesion Overlap (PRIMARY metric per H-5 v2.2):
+Two metrics are computed (per INVARIANTS EH-2 / H-5):
+  ALO  — Attention-Lesion Overlap (PRIMARY metric per H-5):
           |activation ∩ lesion| / |lesion|
           Fraction of the lesion area covered by high-activation regions.
   IoU  — Intersection-over-Union (SECONDARY metric):

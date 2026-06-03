@@ -4,7 +4,7 @@ Wraps the pytorch_grad_cam library to provide a clean interface for generating
 heatmaps from fundus images.  The heatmaps are used as interpretability
 evidence for H-5 (preprocessing directs attention toward lesion regions).
 
-NC-14 (INVARIANTS v2.2): Grad-CAM activation does NOT constitute clinical
+NC-14 (INVARIANTS): Grad-CAM activation does NOT constitute clinical
 localization of pathology — it is an interpretability tool, not a diagnostic
 output.  Grad-CAM overlays indicate regions of high gradient-weighted
 activation in the final convolutional layer and do not represent pixel-level

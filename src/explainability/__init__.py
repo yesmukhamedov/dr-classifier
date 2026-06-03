@@ -1,6 +1,6 @@
 """Grad-CAM explainability tools for DR classification (Experiment 4).
 
-NC-14 (INVARIANTS v2.2): Grad-CAM activation does NOT constitute clinical
+NC-14 (INVARIANTS): Grad-CAM activation does NOT constitute clinical
 localization of pathology — it is an interpretability tool, not a diagnostic
 output.
 """

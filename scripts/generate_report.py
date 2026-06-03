@@ -449,7 +449,7 @@ def generate_report(outputs_root: Path, output_path: Path) -> None:
         f"**Generated:** {date.today().isoformat()}  \n"
         f"**Outputs root:** `{outputs_root}`\n\n"
         f"> **Scope note (IT-1):** All results are bounded to the datasets, architectures, "
-        f"and preprocessing configurations documented in INVARIANTS v2.2.  "
+        f"and preprocessing configurations documented in INVARIANTS.  "
         f"No claims are made beyond the experimental conditions tested.\n\n"
         f"> **NC-14:** Grad-CAM activation maps are interpretability evidence only.  "
         f"They do not constitute clinical localization of pathology.\n"

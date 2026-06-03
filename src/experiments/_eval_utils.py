@@ -24,24 +24,26 @@ from src.data.augmentation import FundusAugmentation
 from src.data.datasets import EyePACSDataset
 from src.data.splits import PatientLevelKFold
 from src.models.factory import create_model
-from src.preprocessing.pipeline import PreprocessingPipeline
+from src.preprocessing.pipeline_v5 import PreprocessingPipelineV5
+from src.preprocessing.config import PreprocessingV5Config
 from src.training.checkpoint import CheckpointManager
 from src.training.trainer import Trainer
 
 
 # ── Pipeline builder ──────────────────────────────────────────────────────────
 
-def build_full_pipeline(preproc_cfg: dict) -> PreprocessingPipeline:
-    """Build the full 5-component preprocessing pipeline from config."""
-    return PreprocessingPipeline.create_full(
-        config={
-            "target_size":      preproc_cfg.get("target_size", 512),
-            "clahe_clip_limit": preproc_cfg.get("clahe", {}).get("clip_limit", 2.0),
-            "clahe_grid_size":  preproc_cfg.get("clahe", {}).get("tile_grid_size", [8, 8]),
-            "saturation_scale": preproc_cfg.get("hsv", {}).get("saturation_scale", 1.2),
-            "value_scale":      preproc_cfg.get("hsv", {}).get("value_scale", 1.1),
-        }
-    )
+def build_full_pipeline(v5_cfg: dict, is_training: bool = False) -> PreprocessingPipelineV5:
+    """Build the full V5 8-stage preprocessing pipeline from config.
+
+    Args:
+        v5_cfg: The ``preprocessing_v5`` section of the merged config dict.
+        is_training: Whether to enable stochastic augmentation.
+
+    Returns:
+        Configured V5 pipeline instance.
+    """
+    pp_config = PreprocessingV5Config.from_dict(v5_cfg)
+    return PreprocessingPipelineV5(pp_config, is_training=is_training)
 
 
 # ── Model loading / training ──────────────────────────────────────────────────
@@ -125,8 +127,8 @@ def _train_fresh(
     splits = splitter.split(all_paths, all_labels, all_pids)
     train_idx, val_idx = splits[0]
 
-    preproc_cfg = config["preprocessing"]
-    pipeline    = build_full_pipeline(preproc_cfg)
+    v5_cfg   = config["preprocessing_v5"]
+    pipeline = build_full_pipeline(v5_cfg, is_training=True)
     aug         = FundusAugmentation(config["augmentation"])
     trainer     = Trainer(config, device="auto")
 

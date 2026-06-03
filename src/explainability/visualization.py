@@ -1,6 +1,6 @@
 """Visualization helpers for Grad-CAM overlays and comparison figures (Exp 4).
 
-NC-14 (INVARIANTS v2.2): Saved figures are interpretability evidence only.
+NC-14 (INVARIANTS): Saved figures are interpretability evidence only.
 They do NOT constitute clinical lesion localization.
 """
 

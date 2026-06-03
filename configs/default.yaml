@@ -1,42 +1,29 @@
 seed: 42
 deterministic: true
-pipeline_version: "v4"
+pipeline_version: "v5"
 
 subset:
-  enabled:    true
-  fraction:   0.4
+  enabled:    false       # V5: 100% EyePACS
+  fraction:   1.0
   seed:       42
 
 paths:
-  eyepacs:       /mnt/d/datasets/EyePACS
-  # DROPPED V3 — not an active dataset
-  # aptos:       /mnt/d/datasets/APTOS 2019
-  idrid:         /mnt/d/datasets/IDRiD
-  messidor:      /mnt/d/datasets/Messidor
-  messidor2:     /mnt/d/datasets/Messidor-2
-  rfmid:         /mnt/d/datasets/RFMiD/A. RFMiD_All_Classes_Dataset
-  ddr:           /mnt/d/datasets/DDR
-  odir:          /mnt/d/datasets/ODIR-5K
+  eyepacs:       "E:/datasets/EyePACS"
+  aptos:         "E:/datasets/APTOS 2019"
+  idrid:         "E:/datasets/IDRiD"
+  messidor2:     "E:/datasets/Messidor-2"
+  rfmid:         "E:/datasets/RFMiD"
+  ddr:           "E:/datasets/DDR"
+  odir:          "E:/datasets/ODIR-5K"
+  clinical:      "E:/datasets/clinical"
   output_dir:    outputs/
 
-preprocessing_v4:
-  # Toggles
+preprocessing_v5:
+  # --- Stage 0: Canonical Flip ---
   use_canonical_flip: true
+
+  # --- Stage 1: OD-Fovea Rotation ---
   use_od_fovea_rotation: true
-  use_flat_field: true
-  use_clahe: true
-  use_pca_color: true
-  use_brightness_contrast: true
-  use_shear: true
-  use_stretch: true
-
-  # Stage 1 — Crop + Resize
-  target_size: 512
-
-  # Stage 2 — Flat-Field
-  flat_field_sigma: 45.0
-
-  # Stage 0b — OD-Fovea Rotation Detection
   od_blur_sigma: 15.0
   od_percentile: 97.0
   fovea_blur_sigma: 25.0
@@ -45,80 +32,75 @@ preprocessing_v4:
   adaptive_rotation_sigma: true
   fallback_rotation_sigma: 13.0
 
-  # Stage 3 — Upgraded CLAHE
+  # --- Stage 2: FOV Crop + Isotropic Resize ---
+  target_size: 512
+
+  # --- Stage 3: FOV Mask Generation ---
+  # Implicit — mask generated during isotropic resize (crop_resize module)
+
+  # --- Stage 4: Flat-Field Correction ---
+  flat_field_mode: adaptive               # "adaptive" (σ=factor·D) or "fixed" (σ=flat_field_sigma)
+  flat_field_sigma_factor: 0.07           # σ = 0.07 × FOV diameter D
+  flat_field_sigma: 45.0                  # fallback if mode=fixed or D unavailable
+  flat_field_mask_only: true              # apply correction only inside FOV mask
+
+  # --- Stage 5: CLAHE ---
   clahe_tile_grid_size: [8, 8]
   clahe_clip_factor: 2.0
   clahe_global_threshold: 0.01
   clahe_train_prob: 0.8
 
-  # Stage 5 — Augmentation
+  # --- Stage 6: Augmentation (train only) ---
   rotation_sigma: 13.0
   rotation_clip: 40.0
   zoom_range: [0.9, 1.1]
-  stretch_range: [0.952381, 1.05]   # [1/1.05, 1.05]
+  stretch_range: [0.952381, 1.05]         # [1/1.05, 1.05]
   shear_range: [-2.0, 2.0]
   shear_prob: 0.3
-  interp_weights: [0.6, 0.3, 0.1]  # LINEAR, CUBIC, NEAREST
-  border_mode: 4                    # cv2.BORDER_REFLECT
+  interp_weights: [0.6, 0.3, 0.1]        # LINEAR, CUBIC, NEAREST
+  border_mode: 4                          # cv2.BORDER_REFLECT
   pca_color_sigma: 0.1
   pca_color_prob: 0.5
   brightness_alpha_range: [0.9, 1.1]
   brightness_beta_range: [-10.0, 10.0]
   bc_prob: 0.5
+  use_pca_color: true
+  use_brightness_contrast: true
+  use_shear: true
+  use_stretch: true
 
-  # Stage 4 — Normalise (ImageNet)
-  normalize_mean: [0.485, 0.456, 0.406]
-  normalize_std: [0.229, 0.224, 0.225]
-
-preprocessing:
-  fov_standardization: true
-  green_channel:       true
-  normalization:       true
-  clahe:               true
-  hsv_enhancement:     true
-  target_size:         512
-  clahe:
-    enabled:     true
-    clip_limit:  2.0      # dynamic; T/80 reference from LC-AlTimemy-2021
-    tile_grid_size: [8, 8]
-  hsv:
-    enabled:          true
-    saturation_scale: 1.2
-    value_scale:      1.1
-
-augmentation:
-  horizontal_flip: true
-  vertical_flip:   true
-  rotation_degrees: 15
-  zoom_range:       0.10   # ±10%
-  brightness_range: [0.9, 1.1]
+  # --- Stage 7: Dataset-Specific Normalize ---
+  normalize_mode: dataset_specific        # "dataset_specific" or "imagenet"
+  # Dataset-specific stats computed from EyePACS train set (mask=1.0 pixels only)
+  # Will be populated by compute_dataset_stats.py script
+  dataset_mean: null                      # placeholder — compute before first run
+  dataset_std: null                       # placeholder — compute before first run
+  # ImageNet fallback (used for baseline configs)
+  imagenet_mean: [0.485, 0.456, 0.406]
+  imagenet_std: [0.229, 0.224, 0.225]
 
 cross_validation:
-  n_folds:              3
+  n_folds:              5
   patient_level_split:  true
   stratified:           true
 
 models:
   resnet50:
-    pretrained:   true
-    num_classes:  5
-    dropout:      0.4
-    in_channels:  4
-  efficientnet_b0:
-    pretrained:   true
-    num_classes:  5
-    dropout:      0.4
-    in_channels:  4
+    pretrained:      true
+    num_classes:     5
+    dropout:         0.4
+    mixed_precision: true
+    # in_channels set per-experiment: 3 (baseline) or 4 (full V5)
   efficientnet_b3:
-    pretrained:   true
-    num_classes:  5
-    dropout:      0.4
-    in_channels:  4
+    pretrained:      true
+    num_classes:     5
+    dropout:         0.4
+    mixed_precision: false   # fp16 overflow — must stay disabled
   efficientnet_b4:
-    pretrained:   true
-    num_classes:  5
-    dropout:      0.4
-    in_channels:  4
+    pretrained:      true
+    num_classes:     5
+    dropout:         0.4
+    mixed_precision: false   # fp16 overflow — must stay disabled
 
 training:
   optimizer:          adam
@@ -126,11 +108,11 @@ training:
   weight_decay:       0.0001
   batch_size:         16
   max_epochs:         20
-  mixed_precision:    true
+  mixed_precision:    true   # DEPRECATED — per-model setting in models.*.mixed_precision is authoritative
   num_workers:        4
   class_weights:      inverse_frequency
-  loss_type:          focal           # "focal" or "ce"
-  focal_gamma:        2.0             # focusing parameter (ignored if loss_type=ce)
+  loss_type:          focal               # Focal Loss only
+  focal_gamma:        2.0
   early_stopping:
     patience:         5
     monitor:          val_weighted_f1
@@ -140,11 +122,6 @@ training:
     factor:           0.5
     patience:         3
     min_lr:           1.0e-6
-  two_stage:
-    stage1_epochs:    30
-    stage1_lr:        0.001
-    stage2_epochs:    70
-    stage2_lr:        0.0001
 
 evaluation:
   primary_metrics:
@@ -153,53 +130,75 @@ evaluation:
     - cohen_kappa
     - accuracy
   dominance_thresholds:
-    f1_delta:         0.05    # >= 5 percentage points
-    auc_delta:        0.02    # >= 0.02
+    f1_delta:         0.05
+    auc_delta:        0.02
     kappa_no_degradation: true
   bootstrap_iterations: 1000
   confidence_level:   0.95
 
 experiments:
   exp1:
-    name:       "V3 Experiment 1: 2x2 Factorial (Preprocessing vs Architecture)"
+    name:       "Experiment 1: Preprocessing Dominance (2x2 Factorial)"
     hypothesis: H-1
     dataset:    eyepacs
     configurations:
-      A: {preprocessing: baseline, model: resnet50}
-      B: {preprocessing: full,     model: resnet50}
-      C: {preprocessing: baseline, model: efficientnet_b3}
-      D: {preprocessing: full,     model: efficientnet_b3}
+      A: {preprocessing: baseline, model: resnet50,        in_channels: 3}
+      B: {preprocessing: full_v5,  model: resnet50,        in_channels: 4}
+      C: {preprocessing: baseline, model: efficientnet_b3, in_channels: 3}
+      D: {preprocessing: full_v5,  model: efficientnet_b3, in_channels: 4}
 
   exp2:
-    name:       "V3 Experiment 2: Preprocessing Component Ablation"
+    name:       "Experiment 2: Component Ablation + Parameter Sweeps"
     hypothesis: H-2
     dataset:    eyepacs
-    configurations:
-      - components: [fov_standardization]
-      - components: [fov_standardization, normalize]
-      - components: [fov_standardization, clahe]
-      - components: [fov_standardization, clahe, normalize]
-      - components: [fov_standardization, clahe, hsv_enhancement, green_channel, normalize]
+    ablation_stages:
+      - {name: "baseline",           stages: [stretch_resize, imagenet_norm],                                       channels: 3}
+      - {name: "+canonical_flip",    stages: [canonical_flip, stretch_resize, imagenet_norm],                        channels: 3}
+      - {name: "+od_fovea_rotation", stages: [canonical_flip, od_fovea, stretch_resize, imagenet_norm],              channels: 3}
+      - {name: "+isotropic+mask",    stages: [canonical_flip, od_fovea, isotropic_resize, fov_mask, imagenet_norm],  channels: 4}
+      - {name: "+flat_field",        stages: [canonical_flip, od_fovea, isotropic_resize, fov_mask, flat_field, imagenet_norm], channels: 4}
+      - {name: "+clahe",             stages: [canonical_flip, od_fovea, isotropic_resize, fov_mask, flat_field, clahe, imagenet_norm], channels: 4}
+      - {name: "full_v5",            stages: all, channels: 4}
     clahe_sweep:
-      dataset:    idrid
+      dataset:    eyepacs
       clip_limits: [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
-
-  # DROPPED V3: old exp3 robustness (Experiment 3: Robustness to Image Degradation)
-  # — APTOS dataset dropped; degradation perturbation experiment removed from V3 scope
+    flat_field_sweep:
+      dataset:    eyepacs
+      sigma_factors: [0.05, 0.06, 0.07, 0.08, 0.09, 0.10]
 
   exp3:
-    name:       "V3 Experiment 3: Cross-Dataset Generalization + Device Robustness"
-    hypothesis: [H-4, H-6]   # merged old exp5 (H-4) + old exp6 (H-6)
+    name:       "Experiment 3: Cross-Dataset Transferability"
+    hypothesis: H-4
     train_dataset: eyepacs
-    test_datasets: [messidor, messidor2, idrid, rfmid, ddr, odir]
-    generalization_threshold: 0.85   # G = F1_external / F1_EyePACS >= 0.85
+    test_datasets: [aptos]
+    generalization_threshold: 0.85
 
   exp4:
-    name:       "V3 Experiment 4: Grad-CAM Explainability"
+    name:       "Experiment 4: Explainability (Grad-CAM)"
     hypothesis: H-5
-    dataset:    idrid
+    train_dataset: eyepacs
+    test_datasets:
+      quantitative: idrid
+      qualitative:  clinical
     model:      efficientnet_b4
     samples_per_class: 10
 
-  # old exp5 (Clinical Generalization, H-4) — MERGED into V3 exp3
-  # old exp6 (Device Domain Shift, H-6)    — MERGED into V3 exp3
+  exp5:
+    name:       "Experiment 5: Clinical Degradation Resistance"
+    hypothesis: H-7
+    train_dataset: eyepacs
+    test_datasets: [idrid, messidor2]
+    metric:     delta_f1
+
+  exp6:
+    name:       "Experiment 6: Device Domain Shift"
+    hypothesis: H-6
+    train_dataset: eyepacs
+    test_datasets: [ddr, odir, rfmid]
+    dr_labels_only: true
+
+  exp7:
+    name:       "Experiment 7: Small Data Training"
+    train_dataset: idrid
+    test_dataset:  clinical
+    cross_validation: 5

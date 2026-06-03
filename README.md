@@ -41,7 +41,7 @@ dr-classifier/
 ├── run_experiment.py            # CLI entry point for all experiments
 ├── configs/
 │   ├── default.yaml             # Master config (pipeline, training, evaluation)
-│   └── smoke_test_1pct.yaml     # 1% subset for quick validation
+│
 ├── src/
 │   ├── preprocessing/           # V4 pipeline (14 modules)
 │   │   ├── pipeline_v4.py       #   Pipeline orchestrator
@@ -85,7 +85,7 @@ dr-classifier/
 │   ├── degradation/             # Synthetic image perturbations (Exp 3)
 │   └── utils/                   # Config loader, seed, image quality
 ├── docs/                        # Governance system
-│   ├── INVARIANTS.md            #   Binding constraint system (v4.0)
+│   ├── INVARIANTS.md            #   Binding constraint system
 │   ├── ARGUMENT_MAP.md          #   Claim-evidence-dependency structure
 │   ├── RESEARCH_ARCHITECTURE.md #   Methodological blueprint
 │   ├── HYPOTHESIS.md            #   H-1 through H-6
@@ -137,9 +137,6 @@ python run_experiment.py exp1 --configs D --fold 0
 
 # Resume from checkpoint
 python run_experiment.py exp1 --configs D --resume
-
-# Smoke test (1% subset)
-python run_experiment.py exp1 --config configs/smoke_test_1pct.yaml
 
 # Other experiments
 python run_experiment.py exp2
